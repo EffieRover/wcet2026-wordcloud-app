@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Word cloud (presenter)</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    background: #02235C;
+    color: #FFFFFF;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header { padding: 1rem 2rem 0; }
+  h1 { margin: 0; font-size: 1.6rem; font-weight: 600; }
+
+  #cloud {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  #inner {
+    max-width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: .3rem 1.6rem;
+    padding: 1rem 2rem;
+  }
+  .w {
+    font: inherit;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #FFFFFF;
+    background: none;
+    border: 0;
+    border-radius: .3em;
+    padding: .05em .2em;
+    cursor: pointer;
+    transition: color .15s;
+  }
+  .w:hover { background: rgba(255, 255, 255, .14); }
+  .w:focus-visible { outline: 3px solid #FFFFFF; outline-offset: 4px; }
+  /* Struck = line through + lighter weight + dimmer color, so it never relies on color alone. */
+  .w[aria-pressed="true"] {
+    color: #9DB0D6;
+    font-weight: 400;
+    text-decoration: line-through;
+    text-decoration-thickness: .1em;
+  }
+  #empty { font-size: 2rem; margin: 0; }
+
+  footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .75rem 1.25rem;
+    padding: .75rem 2rem 1rem;
+    font-size: 1.05rem;
+  }
+  footer button {
+    font: inherit;
+    color: #FFFFFF;
+    background: transparent;
+    border: 2px solid #FFFFFF;
+    border-radius: .4rem;
+    padding: .45rem 1rem;
+    cursor: pointer;
+  }
+  footer button:hover { background: rgba(255, 255, 255, .14); }
+  footer button:focus-visible { outline: 3px solid #FFFFFF; outline-offset: 3px; }
+  footer [hidden] { display: none; }
+  #count { margin-left: auto; }
+
+  @media (prefers-reduced-motion: reduce) { .w { transition: none; } }
+</style>
+</head>
+<body>
+<header><h1 id="prompt"></h1></header>
+
+<div id="cloud"><div id="inner"><p id="empty">Waiting for words…</p></div></div>
+
+<footer>
+  <button id="signin" type="button">Sign in with Google</button>
+  <button id="signout" type="button" hidden>Sign out</button>
+  <span id="status" role="status" aria-live="polite">Not signed in. Sign in to cross out words.</span>
+  <span id="count"></span>
+</footer>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+  import { getDatabase, ref, onValue, set, remove } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+  import { firebaseConfig, PROMPT, collapse, keyFor } from "./config.js";
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  const auth = getAuth(app);
+
+  const inner = document.getElementById("inner");
+  const cloud = document.getElementById("cloud");
+  const statusEl = document.getElementById("status");
+  const countEl = document.getElementById("count");
+  const signinBtn = document.getElementById("signin");
+  const signoutBtn = document.getElementById("signout");
+  document.getElementById("prompt").textContent = PROMPT;
+
+  let user = null;
+  let subs = {};
+  let struck = {};
+  let scale = 1;
+  const els = new Map(); // key -> { el, rem }
+
+  // ---- sign in ----
+  signinBtn.addEventListener("click", async () => {
+    try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+    catch (err) { statusEl.textContent = "Sign-in did not finish. Try again (allow the popup)."; }
+  });
+  signoutBtn.addEventListener("click", () => signOut(auth));
+  onAuthStateChanged(auth, (u) => {
+    user = u;
+    signinBtn.hidden = !!u;
+    signoutBtn.hidden = !u;
+    // No email on screen: this is projected.
+    statusEl.textContent = u
+      ? "Signed in. Tap a word to cross it out. Tap again to bring it back."
+      : "Not signed in. Sign in to cross out words.";
+  });
+
+  // ---- live data ----
+  onValue(ref(db, "submissions"), (snap) => { subs = snap.val() || {}; render(); });
+  onValue(ref(db, "struck"), (snap) => { struck = snap.val() || {}; render(); });
+
+  function hashOrder(key) {
+    let h = 0;
+    for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 1000;
+    return h;
+  }
+
+  function render() {
+    // Group submissions by merged key.
+    const groups = new Map();
+    for (const s of Object.values(subs)) {
+      const label = collapse(s && s.text ? s.text : "");
+      if (!label) continue;
+      const key = keyFor(label);
+      const g = groups.get(key);
+      if (g) g.count++;
+      else groups.set(key, { key, label, count: 1 });
+    }
+
+    document.getElementById("empty").hidden = groups.size > 0;
+
+    // Remove elements that no longer exist.
+    for (const [key, info] of els) {
+      if (!groups.has(key)) { info.el.remove(); els.delete(key); }
+    }
+
+    const max = Math.max(1, ...Array.from(groups.values(), g => g.count));
+    let live = 0;
+
+    for (const g of groups.values()) {
+      let info = els.get(g.key);
+      if (!info) {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.className = "w";
+        el.style.order = hashOrder(g.key);
+        el.textContent = g.label; // textContent, never innerHTML
+        el.addEventListener("click", () => toggle(g.key));
+        inner.appendChild(el);
+        info = { el, rem: 2 };
+        els.set(g.key, info);
+      }
+      const t = max > 1 ? (g.count - 1) / (max - 1) : 0;
+      info.rem = 2 + 4.5 * t; // 2rem for one mention up to 6.5rem for the top word
+      const isStruck = struck[g.key] === true;
+      info.el.setAttribute("aria-pressed", String(isStruck));
+      info.el.setAttribute("aria-label", `${g.label}, said ${g.count} ${g.count === 1 ? "time" : "times"}`);
+      if (!isStruck) live++;
+    }
+
+    countEl.textContent = groups.size
+      ? `${groups.size} ${groups.size === 1 ? "word" : "words"}, ${live} still showing`
+      : "";
+    fit();
+  }
+
+  // Shrink everything until the whole cloud fits on screen.
+  function sizeAll() {
+    for (const info of els.values()) info.el.style.fontSize = (info.rem * scale) + "rem";
+  }
+  function fit() {
+    scale = 1;
+    sizeAll();
+    let n = 0;
+    while (inner.offsetHeight > cloud.clientHeight && n < 25) {
+      scale *= 0.92;
+      sizeAll();
+      n++;
+    }
+  }
+  window.addEventListener("resize", fit);
+
+  // ---- strike / un-strike ----
+  async function toggle(key) {
+    if (!user) { statusEl.textContent = "Sign in with Google first, then tap words."; return; }
+    try {
+      if (struck[key] === true) await remove(ref(db, "struck/" + key));
+      else await set(ref(db, "struck/" + key), true);
+    } catch (err) {
+      statusEl.textContent = "Could not save that. Is this the Google account named in the database rules?";
+    }
+  }
+</script>
+</body>
+</html>
