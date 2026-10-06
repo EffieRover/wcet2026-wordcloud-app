@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Word cloud (view only)</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    background: #02235C;
+    color: #FFFFFF;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  header { padding: .75rem 1.25rem 0; }
+  header[hidden] { display: none; }
+  h1 { margin: 0; font-size: 1.4rem; font-weight: 600; }
+
+  #cloud {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  #list {
+    list-style: none;
+    margin: 0;
+    max-width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: .25rem 1.4rem;
+    padding: .75rem 1.25rem;
+  }
+  .w {
+    font-weight: 700;
+    line-height: 1.1;
+    color: #FFFFFF;
+    padding: .05em .2em;
+  }
+  /* Struck = line through + lighter weight + dimmer color, so it never relies on color alone. */
+  .w.struck {
+    color: #9DB0D6;
+    font-weight: 400;
+    text-decoration: line-through;
+    text-decoration-thickness: .1em;
+  }
+  .sr {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  #empty { font-size: 1.6rem; margin: 0; }
+</style>
+</head>
+<body>
+<header id="head" hidden><h1 id="prompt"></h1></header>
+
+<div id="cloud">
+  <ul id="list" aria-live="polite"></ul>
+  <p id="empty">Waiting for words…</p>
+</div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+  import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+  import { firebaseConfig, PROMPT, collapse, keyFor } from "./config.js";
+
+  const db = getDatabase(initializeApp(firebaseConfig));
+  const list = document.getElementById("list");
+  const cloud = document.getElementById("cloud");
+
+  // Optional: add ?title=1 to the address to show the question above the cloud.
+  if (new URLSearchParams(location.search).get("title") === "1") {
+    document.getElementById("head").hidden = false;
+    document.getElementById("prompt").textContent = PROMPT;
+  }
+
+  let subs = {};
+  let struck = {};
+  let scale = 1;
+  const els = new Map(); // key -> { el, rem }
+
+  onValue(ref(db, "submissions"), (snap) => { subs = snap.val() || {}; render(); });
+  onValue(ref(db, "struck"), (snap) => { struck = snap.val() || {}; render(); });
+
+  function hashOrder(key) {
+    let h = 0;
+    for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) % 1000;
+    return h; // same order as presenter.html, so both screens look alike
+  }
+
+  function render() {
+    const groups = new Map();
+    for (const s of Object.values(subs)) {
+      const label = collapse(s && s.text ? s.text : "");
+      if (!label) continue;
+      const key = keyFor(label);
+      const g = groups.get(key);
+      if (g) g.count++;
+      else groups.set(key, { key, label, count: 1 });
+    }
+
+    document.getElementById("empty").hidden = groups.size > 0;
+
+    for (const [key, info] of els) {
+      if (!groups.has(key)) { info.el.remove(); els.delete(key); }
+    }
+
+    const max = Math.max(1, ...Array.from(groups.values(), g => g.count));
+
+    for (const g of groups.values()) {
+      let info = els.get(g.key);
+      if (!info) {
+        const el = document.createElement("li");
+        el.className = "w";
+        el.style.order = hashOrder(g.key);
+        const text = document.createElement("span");
+        text.textContent = g.label; // textContent, never innerHTML
+        const sr = document.createElement("span");
+        sr.className = "sr";
+        el.append(text, sr);
+        list.appendChild(el);
+        info = { el, sr, rem: 2 };
+        els.set(g.key, info);
+      }
+      const t = max > 1 ? (g.count - 1) / (max - 1) : 0;
+      info.rem = 2 + 4.5 * t;
+      const isStruck = struck[g.key] === true;
+      info.el.classList.toggle("struck", isStruck);
+      info.sr.textContent = isStruck ? " (crossed out)" : "";
+    }
+    fit();
+  }
+
+  function sizeAll() {
+    for (const info of els.values()) info.el.style.fontSize = (info.rem * scale) + "rem";
+  }
+  function fit() {
+    scale = 1;
+    sizeAll();
+    let n = 0;
+    while (list.offsetHeight > cloud.clientHeight && n < 30) {
+      scale *= 0.92;
+      sizeAll();
+      n++;
+    }
+  }
+  window.addEventListener("resize", fit);
+</script>
+</body>
+</html>
