@@ -81,6 +81,7 @@
   footer button:focus-visible { outline: 3px solid #FFFFFF; outline-offset: 3px; }
   footer [hidden] { display: none; }
   #count { margin-left: auto; }
+  #reset.armed { background: #FFFFFF; color: #02235C; font-weight: 700; }
 
   @media (prefers-reduced-motion: reduce) { .w { transition: none; } }
 </style>
@@ -95,6 +96,7 @@
   <button id="signout" type="button" hidden>Sign out</button>
   <span id="status" role="status" aria-live="polite">Not signed in. Sign in to cross out words.</span>
   <span id="count"></span>
+  <button id="reset" type="button" hidden>Reset (erase all words)</button>
 </footer>
 
 <script type="module">
@@ -113,6 +115,7 @@
   const countEl = document.getElementById("count");
   const signinBtn = document.getElementById("signin");
   const signoutBtn = document.getElementById("signout");
+  const resetBtn = document.getElementById("reset");
   document.getElementById("prompt").textContent = PROMPT;
 
   let user = null;
@@ -131,6 +134,7 @@
     user = u;
     signinBtn.hidden = !!u;
     signoutBtn.hidden = !u;
+    resetBtn.hidden = !u;
     // No email on screen: this is projected.
     statusEl.textContent = u
       ? "Signed in. Tap a word to cross it out. Tap again to bring it back."
@@ -211,6 +215,32 @@
     }
   }
   window.addEventListener("resize", fit);
+
+  // ---- reset (two clicks, so a stray tap on stage can't wipe the room's words) ----
+  const RESET_LABEL = "Reset (erase all words)";
+  let armTimer;
+  function disarm() {
+    clearTimeout(armTimer);
+    resetBtn.classList.remove("armed");
+    resetBtn.textContent = RESET_LABEL;
+  }
+  resetBtn.addEventListener("click", async () => {
+    if (!user) return;
+    if (!resetBtn.classList.contains("armed")) {
+      resetBtn.classList.add("armed");
+      resetBtn.textContent = "Click again to erase EVERYTHING";
+      statusEl.textContent = "Click Reset again within 5 seconds to erase all words and strikes.";
+      armTimer = setTimeout(() => { disarm(); statusEl.textContent = "Reset cancelled."; }, 5000);
+      return;
+    }
+    disarm();
+    try {
+      await Promise.all([remove(ref(db, "submissions")), remove(ref(db, "struck"))]);
+      statusEl.textContent = "Everything erased. Ready for a fresh round.";
+    } catch (err) {
+      statusEl.textContent = "Could not reset. Have the updated rules been published in Firebase?";
+    }
+  });
 
   // ---- strike / un-strike ----
   async function toggle(key) {

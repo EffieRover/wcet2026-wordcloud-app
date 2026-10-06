@@ -69,7 +69,9 @@ Without this, the Google popup fails.
 
 ## 9. Clear the test data
 
-Firebase console > Realtime Database > Data. Hover over `submissions`, click the red X to delete it, then do the same for `struck`. Do this the day before the talk, and again right before if you test again.
+Easiest: sign in on `presenter.html` and click **Reset (erase all words)** at the bottom, then click it again within 5 seconds to confirm. This erases every word and every strike. (The rules must include the owner-delete lines for this to work, so publish the latest `database.rules.json` first.)
+
+Or by hand: Firebase console > Realtime Database > Data. Hover over `submissions`, click the red X to delete it, then do the same for `struck`. Do this the day before the talk, and again right before if you test again.
 
 ## 10. After the talk: lock it
 
@@ -109,3 +111,13 @@ and Publish. Phones can no longer add words, and the cloud stays readable.
 - **Sign-in popup closes or errors:** check step 7 (authorized domain) and that your browser allows the popup.
 - **Tapping a word shows "Could not save that":** the email in the rules doesn't match the Google account you signed in with. Check spelling and lowercase.
 - **Page loads but cloud stays empty:** open the browser console (F12) and look for a red error. The most common one is a typo in `config.js`.
+
+## Putting the live cloud on a PowerPoint slide
+
+Use `view.html`, not `presenter.html`. It is read-only (no sign-in, no tapping), so it works inside embedded browsers, and it updates live as you strike words in `presenter.html`.
+
+- Address to embed: `https://YOURUSERNAME.github.io/REPONAME/view.html`
+- Add `?title=1` to the end of the address to show the question above the cloud.
+- In PowerPoint, use a web-page add-in (Insert > Get Add-ins, search "Web Viewer" or "LiveWeb") and paste that address. Add-in availability varies, so test it well before the talk, in slideshow mode, on the laptop and Wi-Fi you will use.
+- Keep `presenter.html` open in a separate browser window. Tap words there; they strike on the slide within a second or so.
+- Backups: Alt+Tab to the browser window, or screenshot the final cloud and paste it onto a slide.
